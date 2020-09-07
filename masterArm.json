@@ -1,0 +1,33 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "deploymentName": {
+            "type": "string",
+            "defaultValue": "myLinkedARM"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-10-01",
+            "name": "[parameters('deploymentName')]",
+            "resourceGroup": "dummyRG",
+            "subscriptionId": "1e3572b9-ed28-4477-932c-8931c4d7cb56",
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "https://raw.githubusercontent.com/Sebastian-Negoescu/AzureFirewall/master/linkArm.json",
+                    "contentVersin": "1.0.0.0"
+                },
+                "parameters": {
+                    "subnetId": {
+                        "value": "[reference(parameters('deploymentName')).outputs.fwSubnetId.value]"
+                    }
+                }
+            }
+        }
+    ],
+    "outputs": {}
+}
