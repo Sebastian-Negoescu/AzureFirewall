@@ -1,0 +1,860 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "utcYear": {
+            "type": "string",
+            "defaultValue": "[utcNow('yyyy')]",
+            "metadata": {
+                "description": "Optional. Year data used to generate a SAS token. Default is the current year."
+            }
+        },
+        "managementdiagnosticStorageAccount": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Storage account for diagnostics."
+            }
+        },
+        "managementcomponentStorageAccount": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Storage component account for ARM template linked resources."
+            }
+        },
+        "managementworkspace": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Log Analytics environment"
+            }
+        },
+         "managementevntHubAuthorizationRule": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Management Event Hub Name space Authorization rule."
+            }
+        },
+        "managementEVH": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Management Event Hub for reporting"
+            }
+        },
+        "managementcomponent": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Storage component account used"
+            }
+        },
+        "managementkeyvault": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Key vault for the deployment"
+            }
+        },
+        "rsGroupName": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Deployment resource group."
+            }
+        },
+        "HubVNetAddress": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Mandatory. Address range for the HUB Network X.X.X.X. AzureFirewallSubet, AzureBastionSubnet, GatewaySubnet and Shared Services CIDRs are calculated based on the network"
+            }
+        },
+        "ntwName": {
+            "type": "string",
+            "defaultValue": "NetworkWatcher",
+            "metadata": {
+                "description": "Mandatory. Network watcher Name."
+            }
+        },
+        "ntwResourceGroup": {
+            "type": "string",
+            "defaultValue": "NetworkWatcherRG",
+            "metadata": {
+                "description": "Mandatory. Network watcher resource group name."
+            }
+        },
+        "lockForDeletion": {
+			"type": "bool",
+			"defaultValue": true,
+			"metadata": {
+				"description": "Optional. Switch to lock Key Vault from deletion."
+			}
+		},
+		"tags": {
+			"type": "object",
+			"defaultValue": {
+			},
+			"metadata": {
+				"description": "Optional. Tags of the Key Vault resource."
+			}
+		},
+        "additionalProperties": {
+            "type": "object",
+			"defaultValue": {
+                "Network.SNAT.PrivateRanges": "IANAPrivateRanges",
+                "Network.DNS.EnableProxy": "false",
+                "Network.DNS.Servers": null 
+			},
+            "metadata": {
+                "description": "Optional. Additional Properties used by Azure Firewall."
+            }
+        },
+        "bastionNetworkSecurityGroupSecurityRules": {
+            "type": "array",
+            "metadata": {
+                "description": "Required. Array of Security Rules to deploy to the Network Security Group."
+            }
+        },
+        "sharedNetworkSecurityGroupSecurityRules": {
+            "type": "array",
+            "metadata": {
+                "description": "Required. Array of Security Rules to deploy to the Network Security Group."
+            }
+        },
+        "OnPrem_CIDR": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Required. The CIDR Range for your On-Premises connection."
+            }
+        },
+        "Firewall_Update": {
+            "type": "bool",
+            "defaultValue": false,
+            "metadata": {
+                "description": "Required. Default value is FALSE; this parameter acts as a conditional pivot for firewall update purposes."
+            }
+        },
+        "Firewall_PolicyName": {
+            "type": "string",
+            "metadata": {
+                "description": "Required. The Policy name used by the Firewall Manager."
+            }
+        },
+        "DefaultApplicationRuleCollections": {
+            "type": "array",
+            "metadata": {
+                "description": "Required. The Default Application rule collections deployed for the Azure Firewall."
+            }
+        },
+        "DefaultNetworkRuleCollections": {
+            "type": "array",
+            "metadata": {
+                "description": "Required. The Default Application rule collections deployed for the Azure Firewall."
+            }
+        }
+    },
+    "variables": {
+ 
+        "tags": {
+            "Environment": "GITC-POC",
+            "Owner": "owner.user@vw.de",
+            "TechnicalLead": "TechLead.user@vw.de",
+            "BillingIdentifier": "",
+            "KeepAlive": "true"
+        },
+        "lockForDeletion": false,       
+        "accountSasProperties": {
+            "signedServices": "bt",
+            "signedPermission": "racuw",
+            "signedExpiry": "[concat(string(add(int(parameters('utcYear')), 1)), '-12-31T23:59:59Z')]",
+            "signedResourceTypes": "co",
+            "signedProtocol": "https"
+        },
+        "componentStorageAccountId": "[parameters('managementcomponentStorageAccount')]",
+        "diagnosticStorageAccountId": "[parameters('managementdiagnosticStorageAccount')]",
+        "workspaceId": "[parameters('managementworkspace')]",
+        "eventHubAuthorizationRuleId": "[parameters('managementevntHubAuthorizationRule')]",
+        "eventHubName": "[parameters('managementEVH')]",
+        "storageAccountName": "[if(not(empty(variables('componentStorageAccountId'))), split(variables('componentStorageAccountId'), '/')[8], 'placeholder')]",
+        "componentsBaseUrl": "[concat('https://', variables('storageAccountName'), '.blob.core.windows.net/', variables('containerName'))]",
+        "containerName": "[parameters('managementcomponent')]",
+        "modulesPath": "[concat(variables('componentsBaseUrl'), '/Modules/ARM/')]",
+        "location":"[deployment().location]",
+        "IPAddressRangeSplit": "[split(parameters('HubVNetAddress'),'.')]",
+        "HubCIDR": "[concat(variables('IPAddressRangeSplit')[0],'.',variables('IPAddressRangeSplit')[1],'.',variables('IPAddressRangeSplit')[2],'.',variables('IPAddressRangeSplit')[3])]",
+        "HubNetwork": "[concat(variables('IPAddressRangeSplit')[0],'.',variables('IPAddressRangeSplit')[1],'.',variables('IPAddressRangeSplit')[2])]",
+        "hubaddressPrefix": "[concat(variables('HubCIDR'),'/24')]",
+        "hubfirewalladdress": "[concat(variables('HubNetwork'),'.4')]",
+        "AzureFirewallSubnetCIDR": "[concat(variables('HubNetwork') , '.0/26')]",
+        "AzureBastionSubnetCIDR": "[concat(variables('HubNetwork'), '.64/27')]",
+        "GatewaySubnetCIDR": "[concat(variables('HubNetwork') , '.96/28')]",
+        "sharedservices01CIDR": "[concat(variables('HubNetwork') , '.128/25')]",
+        "ResourceGroupNameSplit": "[split(parameters('rsGroupName'),'-')]",
+        "ProjectID": "[concat(variables('ResourceGroupNameSplit')[1],'-',variables('ResourceGroupNameSplit')[2],'-',variables('ResourceGroupNameSplit')[3],'-',variables('ResourceGroupNameSplit')[4],'-',variables('ResourceGroupNameSplit')[5])]",
+        "ntwWatcherName":"[concat(parameters('ntwName'),'_',variables('location'))]",
+        "networkwatcherStorageAccount": "[concat('st',variables('ResourceGroupNameSplit')[1],variables('ResourceGroupNameSplit')[2],variables('ResourceGroupNameSplit')[3],variables('ResourceGroupNameSplit')[4],'netwa',variables('ResourceGroupNameSplit')[5])]",
+        "HubVNetName": "[concat('vnet-',variables('ProjectID'))]",
+        "AzureFirewallName": "[concat('afw-',variables('ProjectID'))]",
+        "azureFirewallPipName": "[concat(variables('AzureFirewallName'), '-pip')]",
+        "AzureFirewallPipId": "[concat(subscription().id, '/resourceGroups/', parameters('rsGroupName'), '/providers/Microsoft.Network/publicIpAddresses/', variables('azureFirewallPipName'))]",
+        "AzureHubGatewayName": "[concat('vnetgw-',variables('ProjectID'))]",
+        "BastionGatewayName": "[concat('bst-',variables('ProjectID'))]",
+        "BastionGatewayPIP": "[concat('pip-','bst-',variables('ProjectID'))]",
+        "ProjectSpecific": "[concat(variables('ResourceGroupNameSplit')[1],'-',variables('ResourceGroupNameSplit')[2],'-',variables('ResourceGroupNameSplit')[3],'-',variables('ResourceGroupNameSplit')[5])]",
+        "ppipfxname": "[concat('pippfx-',variables('ProjectSpecific'))]",
+        "WorkloadIdentifier":"[concat('-',variables('ResourceGroupNameSplit')[3],'-',variables('ResourceGroupNameSplit')[5])]",
+        "BastionNSGName":"[concat('nsg-','hubbastion',variables('WorkloadIdentifier'))]",
+        "BastionDNSName": "[concat('bst',variables('ResourceGroupNameSplit')[1],variables('ResourceGroupNameSplit')[2],variables('ResourceGroupNameSplit')[3],variables('ResourceGroupNameSplit')[4],variables('ResourceGroupNameSplit')[5])]",
+        "SharedServicesNSGName":"[concat('nsg-','hubsharedservices',variables('WorkloadIdentifier'))]",
+        "ResourceSpecificID": "[concat(variables('ResourceGroupNameSplit')[1],'-',variables('ResourceGroupNameSplit')[2],'-',variables('ResourceGroupNameSplit')[3])]",
+        "HubUDR": "[concat('udr-',variables('ResourceSpecificID'),'-','hubgw','-',variables('ResourceGroupNameSplit')[5])]",
+        "SharedServicesUDR": "[concat('udr-',variables('ResourceSpecificID'),'-','hubsharedservice','-',variables('ResourceGroupNameSplit')[5])]",
+        "GatewayFrontEndPIP01": "[concat('pip-','hubgw',variables('ResourceGroupNameSplit')[4],'-',variables('ResourceGroupNameSplit')[3],variables('ResourceGroupNameSplit')[5])]",
+        "GatewayFrontEndPIP01DNS": "[concat('pip','hubgw',variables('ResourceGroupNameSplit')[4],variables('ResourceGroupNameSplit')[3],'-',variables('ResourceGroupNameSplit')[5])]"
+       
+    },
+     "resources": [
+        {
+            "type": "Microsoft.Resources/resourceGroups",
+            "apiVersion": "2018-05-01",
+            "name": "[parameters('rsGroupName')]",
+            "location": "[variables('location')]",
+            "tags": "[variables('tags')]"
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('ntwWatcherName')]",
+            "condition": true,
+            "resourceGroup": "[parameters('ntwResourceGroup')]",
+            "dependsOn": [
+                "[parameters('rsGroupName')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'NetworkWatcher/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "networkWatcherName": {
+                        "value":  "[variables('ntwWatcherName')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name":"[variables('networkwatcherStorageAccount')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[parameters('rsGroupName')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'StorageAccounts/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "storageAccountName": {
+                        "value": "[variables('networkwatcherStorageAccount')]"
+                    },
+                    "storageAccountKind": {
+                        "value": "StorageV2"
+                    },
+                    "storageAccountSku": {
+                        "value": "Standard_GRS"
+                    },
+                    "storageAccountAccessTier": {
+                        "value": "Hot"
+                    },
+                    "vNetId": {
+                        "value": ""
+                    },
+                    "networkAcls": {
+                        "value": {
+                        }
+                    },
+                    "blobContainers": {
+                        "value": [
+                        ]
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('HubUDR')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[parameters('rsGroupName')]",
+                "[variables('networkwatcherStorageAccount')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'RouteTables/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "routeTableName": {
+                        "value": "[variables('HubUDR')]"
+                    },
+                    "routes": {
+                        "value": [
+                            {
+                                "name": "set-hub-route-to-firewall",
+                                "properties": {
+                                    "addressPrefix": "[parameters('OnPrem_CIDR')]",
+                                    "nextHopType": "virtualNetworkGateway"
+                                }
+							}
+                        ]
+                    },
+                    "disableBgpRoutePropagation": {
+                        "value": true
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('SharedServicesUDR')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[parameters('rsGroupName')]",
+                "[variables('HubUDR')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'RouteTables/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "routeTableName": {
+                        "value": "[variables('SharedServicesUDR')]"
+                    },
+                    "routes": {
+                        "value": [
+                            {
+                                "name": "set-default-route-to-internet",
+                                "properties": {
+                                    "addressPrefix": "0.0.0.0/0",
+                                    "nextHopType": "VirtualAppliance",
+                                    "nextHopIpAddress": "[variables('hubfirewalladdress')]"
+                                }
+                            }                         
+                        ]
+                    },
+                    "disableBgpRoutePropagation": {
+                        "value": true
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]" 
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('ppipfxname')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[parameters('rsGroupName')]",
+                "[variables('SharedServicesUDR')]"
+
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'PublicIpPrefixes/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "publicIpPrefixName": {
+                        "value": "[variables('ppipfxname')]"
+                    },
+                    "prefixLength": {
+                        "value": 29
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('BastionNSGName')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[parameters('rsGroupName')]",
+                "[variables('ppipfxname')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'NetworkSecurityGroups/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "networkSecurityGroupName": {
+                        "value": "[variables('BastionNSGName')]"
+                    },
+                    "location": {
+                        "value": "[variables('location')]"
+                    },
+                    "networkSecurityGroupSecurityRules": {"value":"[parameters('bastionNetworkSecurityGroupSecurityRules')]"},
+                    "diagnosticStorageAccountId": {
+                        "value": "[variables('diagnosticStorageAccountId')]"
+                    },
+                    "workspaceId": {
+                        "value": "[variables('workspaceId')]"
+                    },
+                    "eventHubAuthorizationRuleId": {
+                        "value": "[variables('eventHubAuthorizationRuleId')]"
+                    },
+                    "eventHubName": {
+                        "value": "[variables('eventHubName')]"
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('SharedServicesNSGName')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[parameters('rsGroupName')]",
+                "[variables('BastionNSGName')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'NetworkSecurityGroups/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "networkSecurityGroupName": {
+                        "value": "[variables('SharedServicesNSGName')]"
+                    },
+                    "location": {
+                        "value": "[variables('location')]"
+                    },
+                    "networkSecurityGroupSecurityRules": {"value":"[parameters('sharedNetworkSecurityGroupSecurityRules')]"},
+                    "diagnosticStorageAccountId": {
+                        "value": "[variables('diagnosticStorageAccountId')]"
+                    },
+                    "workspaceId": {
+                        "value": "[variables('workspaceId')]"
+                    },
+                    "eventHubAuthorizationRuleId": {
+                        "value": "[variables('eventHubAuthorizationRuleId')]"
+                    },
+                    "eventHubName": {
+                        "value": "[variables('eventHubName')]"
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('HubVNetName')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[variables('HubUDR')]",
+                "[variables('SharedServicesUDR')]",
+                "[variables('BastionNSGName')]",
+                "[variables('SharedServicesNSGName')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'VirtualNetwork/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[variables('HubVNetName')]"
+                    },
+                    "vnetAddressPrefixes": {
+                        "value": [
+                            "[variables('hubaddressPrefix')]"
+                        ]
+                    },
+                    "subnets": {
+                        "value": [
+                            {
+                                "name": "AzureFirewallSubnet",
+                                "addressPrefix": "[variables('AzureFirewallSubnetCIDR')]",
+                                "networkSecurityGroupName": "",
+                                "routeTableName": "",
+                                "serviceEndpoints": [
+                                ]
+                            },
+                            {
+                                "name": "AzureBastionSubnet",
+                                "addressPrefix": "[variables('AzureBastionSubnetCIDR')]",
+                                "networkSecurityGroupName": "[variables('BastionNSGName')]",
+                                "routeTableName": "",
+                                "serviceEndpoints": [
+                                ]
+                            },
+                            {
+                                "name": "GatewaySubnet",
+                                "addressPrefix": "[variables('GatewaySubnetCIDR')]",
+                                "networkSecurityGroupName": "",
+                                "routeTableName": "[variables('HubUDR')]",
+                                "serviceEndpoints": [
+                                ]
+                            },
+                            {
+                                "name": "sharedservices01",
+                                "addressPrefix": "[variables('sharedservices01CIDR')]",
+                                "networkSecurityGroupName": "[variables('SharedServicesNSGName')]",
+                                "routeTableName": "[variables('SharedServicesUDR')]",
+                                "serviceEndpoints": [
+                                ]
+                            }
+                        ]
+                    },
+                    "ddosProtectionPlanId": {
+                        "value": ""
+                    },
+                    "diagnosticStorageAccountId": {
+                        "value": "[variables('diagnosticStorageAccountId')]"
+                    },
+                    "workspaceId": {
+                        "value": "[variables('workspaceId')]"
+                    },
+                    "eventHubAuthorizationRuleId": {
+                        "value": "[variables('eventHubAuthorizationRuleId')]"
+                    },
+                    "eventHubName": {
+                        "value": "[variables('eventHubName')]"
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+        
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('BastionGatewayName')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[parameters('rsGroupName')]",
+                "[variables('HubVNetName')]",
+                "[variables('ppipfxname')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'AzureBastion/2019-12-03/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "azureBastionName": {
+                        "value": "[variables('BastionGatewayName')]"
+                    },
+                    "vNetId": {
+                        "value": "[reference(variables('HubVNetName')).outputs.vNetResourceId.value]"
+                    },
+                    "azureBastionPipName": {
+                        "value": "[variables('BastionGatewayPIP')]"
+                    },
+                    "publicIPPrefixId": {
+                        "value": "[reference(variables('ppipfxname')).outputs.publicIpPrefixResourceId.value]"
+                    },
+                    "domainNameLabel": {
+                        "value": "[variables('BastionDNSName')]"
+                    },
+                    "diagnosticLogsRetentionInDays": {
+                        "value": 365
+                    },
+                    "diagnosticStorageAccountId": {
+                        "value": "[variables('diagnosticStorageAccountId')]"
+                    },
+                    "workspaceId": {
+                        "value": "[variables('workspaceId')]"
+                    },
+                    "eventHubAuthorizationRuleId": {
+                        "value": "[variables('eventHubAuthorizationRuleId')]"
+                    },
+                    "eventHubName": {
+                        "value": "[variables('eventHubName')]"
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+		{
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name":  "[variables('AzureFirewallName')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[variables('HubVNetName')]",
+                "[variables('ppipfxname')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'AzureFirewall/2020-09-01/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "azureFirewallName": {
+                        "value": "[variables('AzureFirewallName')]"
+                    },
+                    "Firewall_Update": {
+                        "value": "[parameters('Firewall_Update')]"
+                    },
+                    "firewallPolicyName": {
+                        "value": "[parameters('Firewall_PolicyName')]"
+                    },
+                    "DefaultDnatRuleCollections": {
+                        "value": [
+                            {
+                                "ruleCollectionType": "FirewallPolicyNatRuleCollection",
+                                "name": "test-hub-dnat-collection",
+                                "action": {
+                                    "type": "DNAT"
+                                },
+                                "priority": 500,
+                                "rules": [
+                                    {
+                                        "ruleType": "NatRule",
+                                        "name": "RDP",
+                                        "translatedAddress": "11.0.2.135",
+                                        "translatedPort": "3389",
+                                        "ipProtocols": ["TCP", "UDP"],
+                                        "sourceAddresses": ["*"],
+                                        "destinationAddresses": ["[reference(variables('AzureFirewallPipId'), '2019-09-01', 'Full').properties.ipAddress]"],
+                                        "destinationPorts": ["5001"],
+                                        "sourceIpGroups": []
+                                    },
+                                    {
+                                        "ruleType": "NatRule",
+                                        "name": "SSH",
+                                        "translatedAddress": "11.0.2.136",
+                                        "translatedPort": "22",
+                                        "ipProtocols": ["TCP", "UDP"],
+                                        "sourceAddresses": ["*"],
+                                        "destinationAddresses": ["[reference(variables('AzureFirewallPipId'), '2019-09-01', 'Full').properties.ipAddress]"],
+                                        "destinationPorts": ["5002"],
+                                        "sourceIpGroups": []
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "DefaultApplicationRuleCollections": {
+                        "value": "[parameters('DefaultApplicationRuleCollections')]"
+                    },
+                    "DefaultNetworkRuleCollections": {
+                        "value": "[parameters('DefaultNetworkRuleCollections')]"
+                    },
+                    "vNetId": {
+                        "value": "[reference(variables('HubVNetName')).outputs.vNetResourceId.value]"
+                    },
+                    "additionalProperties": {
+                        "value": "[parameters('additionalProperties')]"
+                    },
+                    "diagnosticStorageAccountId": {
+                        "value": "[variables('diagnosticStorageAccountId')]"
+                    },
+                    "workspaceId": {
+                        "value": "[variables('workspaceId')]"
+                    },
+                    "eventHubAuthorizationRuleId": {
+                        "value": "[variables('eventHubAuthorizationRuleId')]"
+                    },
+                    "eventHubName": {
+                        "value": "[variables('eventHubName')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2019-08-01",
+            "name": "[variables('AzureHubGatewayName')]",
+            "condition": true,
+            "resourceGroup": "[parameters('rsGroupName')]",
+            "dependsOn": [
+                "[variables('HubVNetName')]",
+                "[variables('AzureFirewallName')]",
+                "[variables('ppipfxname')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "debugSetting": {
+                    "detailLevel": "requestContent,responseContent"
+                },
+                "templateLink": {
+                    "uri": "[concat(variables('modulesPath'), 'VirtualNetworkGateway/2019-11-28/deploy.json', '?', listAccountSas(variables('componentStorageAccountId'), '2019-04-01', variables('accountSasProperties')).accountSasToken)]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "virtualNetworkGatewayName": {
+                        "value": "[variables('AzureHubGatewayName')]"
+                    },
+                    "gatewayPipName": {
+                        "value": [
+                            "[variables('GatewayFrontEndPIP01')]"
+                        ]
+                        },
+                    "publicIPPrefixId": {
+                        "value":  "[reference(variables('ppipfxname')).outputs.publicIpPrefixResourceId.value]"
+                    },
+                    "domainNameLabel": {
+                        "value": [
+                            "[variables('GatewayFrontEndPIP01DNS')]"
+                        ]
+                    },
+                    "virtualNetworkGatewayType": {
+                        "value": "Vpn"
+                    },
+                    "virtualNetworkGatewaySku": {
+                        "value": "VpnGw1AZ"
+                    },
+                    "vpnType": {
+                        "value": "RouteBased"
+                    },
+                    "activeActive": {
+                        "value": true
+                    },
+                    "enableBgp": {
+                        "value": false
+                    },
+                    "asn": {
+                        "value": 65000
+                    },
+                    "vNetId": {
+                        "value": "[reference(variables('HubVNetName')).outputs.vNetResourceId.value]"
+                    },
+                    "diagnosticLogsRetentionInDays": {
+                            "value": 365
+                    },
+                    "diagnosticStorageAccountId": {
+                            "value": "[variables('diagnosticStorageAccountId')]"
+                    },
+                    "workspaceId": {
+                            "value": "[variables('workspaceId')]"
+                    },
+                    "eventHubAuthorizationRuleId": {
+                            "value": "[variables('eventHubAuthorizationRuleId')]"
+                    },
+                    "eventHubName": {
+                            "value": "[variables('eventHubName')]"
+                    },
+                    "lockForDeletion": {
+                        "value": "[variables('lockForDeletion')]"
+                    },
+                    "tags": {
+                        "value": "[variables('tags')]"
+                    }
+                }
+            }   
+        }
+    ],
+    "outputs": {
+    }
+}

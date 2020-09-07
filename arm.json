@@ -1,0 +1,128 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "prefix": {
+            "type": "string",
+            "defaultValue": "snfw-"
+        }
+    },
+    "variables": {
+        "vnetName": "[concat(parameters('prefix'), 'vnet')]",
+        "vnetPrefix": "10.137.0.0/16",
+        "subnetName": "subnet01",
+        "subnetPrefix": "10.137.0.0/24",
+        "firewallSubnetName": "AzureFirewallSubnet",
+        "firewallSubnetAddress": "10.137.1.0/26",
+        "pipName": "[concat(parameters('prefix'), 'pip-372194')]",
+        "policyName": "dummyPolicy",
+        "fwName": "[concat(parameters('prefix'), 'afw')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2020-04-01",
+            "name": "[variables('vnetName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": ["[variables('vnetPrefix')]"]
+                },
+                "subnets": [
+                    {
+                        "name": "[variables('subnetName')]",
+                        "properties": {
+                            "addressPrefix": "[variables('subnetPrefix')]"
+                        }
+                    },
+                    {
+                        "name": "[variables('firewallSubnetName')]",
+                        "properties": {
+                            "addressPrefix": "[variables('firewallSubnetAddress')]"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/publicIpAddresses",
+            "apiVersion": "2020-04-01",
+            "name": "[variables('pipName')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+            ],
+            "sku": {
+                "name": "Standard"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "Static",
+                "publicIPAddressVersion": "IPv4"
+            }
+        },
+        {
+            "type": "Microsoft.Network/firewallPolicies",
+            "apiVersion": "2020-04-01",
+            "name": "[variables('policyName')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIpAddresses', variables('pipName'))]"
+            ],
+            "properties": {
+                "threatIntelMode": "Alert"
+            }
+        },
+        {
+            "type": "Microsoft.Network/azureFirewalls",
+            "apiVersion": "2020-04-01",
+            "name": "[variables('fwName')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/firewallPolicies', variables('policyName'))]"
+            ],
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipConf1",
+                        "properties": {
+                            // "subnet": {
+                            //     "id": "[deployment().properties.template.outputs.fwSubnetId.value]"
+                            // },
+                            // "publicIPAddress": {
+                            //     "id": "[deployment().properties.template.outputs.pipAddress.value]"
+                            // }
+                            "subnet": {
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('firewallSubnetName'))]"
+                            },
+                            "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIpAddresses', variables('pipName'))]"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    ],
+    "outputs": {
+        "vnetId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+        },
+        "fwSubnetId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('subnetName'), variables('firewallSubnetName'))]"
+        },
+        "policyId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.Network/firewallPolicies', variables('policyName'))]"
+        },
+        "pipAddress": {
+            "type": "string",
+            "value": "[reference(resourceId('Microsoft.Network/publicIpAddresses', variables('pipName'))).ipAddress]"
+        },
+        "templateOutputObject": {
+            "type": "string",
+            "value": "[deployment().properties.template.outputs.fwSubnetId.value]"
+        }
+    }
+}
