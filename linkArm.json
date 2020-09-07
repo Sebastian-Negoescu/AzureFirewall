@@ -5,6 +5,10 @@
         "prefix": {
             "type": "string",
             "defaultValue": "snfw-"
+        },
+        "subnetId": {
+            "type": "string",
+            "defaultValue": ""
         }
     },
     "variables": {
@@ -92,7 +96,8 @@
                             //     "id": "[deployment().properties.template.outputs.pipAddress.value]"
                             // }
                             "subnet": {
-                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('firewallSubnetName'))]"
+                                // "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('firewallSubnetName'))]"
+                                "id": "[parameters('subnetId')]"
                             },
                             "publicIPAddress": {
                                 "id": "[resourceId('Microsoft.Network/publicIpAddresses', variables('pipName'))]"
